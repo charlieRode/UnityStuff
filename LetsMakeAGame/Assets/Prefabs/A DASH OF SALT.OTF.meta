@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: 366d08e0903b2b344a8abf485cb3d5f2
+timeCreated: 1514324116
+licenseType: Free
+TrueTypeFontImporter:
+  serializedVersion: 4
+  fontSize: 16
+  forceTextureCase: -2
+  characterSpacing: 0
+  characterPadding: 1
+  includeFontData: 1
+  fontName: A Dash of Salt
+  fontNames:
+  - A Dash of Salt
+  fallbackFontReferences: []
+  customCharacters: 
+  fontRenderingMode: 0
+  ascentCalculationMode: 1
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

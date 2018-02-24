@@ -1,0 +1,137 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &100100000
+Prefab:
+  m_ObjectHideFlags: 1
+  serializedVersion: 2
+  m_Modification:
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+  m_ParentPrefab: {fileID: 0}
+  m_RootGameObject: {fileID: 1672520377634510}
+  m_IsPrefabParent: 1
+--- !u!1 &1435169894116878
+GameObject:
+  m_ObjectHideFlags: 0
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  serializedVersion: 5
+  m_Component:
+  - component: {fileID: 4771428171957718}
+  - component: {fileID: 81363130951173368}
+  m_Layer: 0
+  m_Name: AudioListener
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!1 &1672520377634510
+GameObject:
+  m_ObjectHideFlags: 0
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  serializedVersion: 5
+  m_Component:
+  - component: {fileID: 4617368854564582}
+  - component: {fileID: 114297634038184556}
+  - component: {fileID: 114371318361089876}
+  - component: {fileID: 114325429440070282}
+  m_Layer: 0
+  m_Name: AudioManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &4617368854564582
+Transform:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1672520377634510}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 519.91174, y: 439.6108, z: 126}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 4771428171957718}
+  m_Father: {fileID: 0}
+  m_RootOrder: 0
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!4 &4771428171957718
+Transform:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1435169894116878}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 4617368854564582}
+  m_RootOrder: 0
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!81 &81363130951173368
+AudioListener:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1435169894116878}
+  m_Enabled: 1
+--- !u!114 &114297634038184556
+MonoBehaviour:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1672520377634510}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 28e36bc1816011e45a15d29e62577822, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &114325429440070282
+MonoBehaviour:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1672520377634510}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8e4f870e69393fc46822e578447272db, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  soundGroups:
+  - groupID: ImpactSFX
+    group:
+    - {fileID: 8300000, guid: 4f0eba51d932f6043b9c5f1cc44b87df, type: 3}
+    - {fileID: 8300000, guid: b2aabacaaf0b95b43a66e540326a7a1e, type: 3}
+    - {fileID: 8300000, guid: b75bee9b16eb2574a9449988da0ad578, type: 3}
+  - groupID: EnemyDeathSFX
+    group:
+    - {fileID: 8300000, guid: f9371237b7d651c4ea45b542b0ddaf70, type: 3}
+    - {fileID: 8300000, guid: 63c6a73939c912f49a9f21b0c63ae320, type: 3}
+  - groupID: LevelComplete
+    group:
+    - {fileID: 8300000, guid: 2667a0a008b044e218b63df62e2be749, type: 3}
+  - groupID: Pickup
+    group:
+    - {fileID: 8300000, guid: d8d04c6f80a1140db85ede568dab1f51, type: 3}
+--- !u!114 &114371318361089876
+MonoBehaviour:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1672520377634510}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6fd1c3979af682b4ea2ea4914203f701, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  tracks:
+  - {fileID: 8300000, guid: aed8530654ac6394584a04e59ead50b0, type: 3}
+  - {fileID: 8300000, guid: 85a26e5b1c11e79489580183bd0d75d4, type: 3}
+  - {fileID: 8300000, guid: 6ea97356ee8ec99428f2a9daa9014f39, type: 3}
+  - {fileID: 8300000, guid: c5c8d24ceb012314b8fce6b491be4452, type: 3}
+  mainTheme: {fileID: 8300000, guid: 85a26e5b1c11e79489580183bd0d75d4, type: 3}
+  menuTheme: {fileID: 8300000, guid: 76e4d6c7c5d858e4097f49ed4ae4612d, type: 3}
