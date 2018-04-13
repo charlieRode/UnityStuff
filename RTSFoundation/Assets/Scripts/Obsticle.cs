@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class Obsticle : MonoBehaviour, IObsticle {
+public class Obsticle : MonoBehaviour {
 
 	public Vector3 Center
     {

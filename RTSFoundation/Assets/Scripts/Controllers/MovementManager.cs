@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+[RequireComponent(typeof(UnitCtrl))]
+[RequireComponent(typeof(Rigidbody))]
 public class MovementManager : MonoBehaviour {
 
     Vector3 correctionPoint;
@@ -23,10 +25,9 @@ public class MovementManager : MonoBehaviour {
     public Vector3 vSteerSeek;
     public Vector3 vSteerFlee;
     Vector3 _vDesired;
-    IBoid host;
 
-    Vector3 leftSide;
-    Vector3 rightSide;
+    Vector3 vAvoid;
+
     public Transform[] projectionPoints;
     public Transform centerProjectionPoint;
     public float collisionDetectionAngle;
@@ -37,22 +38,6 @@ public class MovementManager : MonoBehaviour {
     public LayerMask groundLayer;
 
     public LayerMask boidLayer;
-
-    public float MAX_SEE_AHEAD;
-    public float MAX_AVOIDANCE_FORCE;
-    public float NEIGHBOR_DISTANCE;
-    public float SEPARATION_WEIGHT;
-    public float ALIGN_WEIGHT;
-    public float COHERE_WEIGHT;
-
-    public float BREAK_SCALE_DOWN;
-
-    public float QUEUE_RADIUS;
-
-    public float COLLISION_AVOIDANCE_WEIGHT;
-
-    [Header("Master Weight")]
-    public float FLOCK_WEIGHT;
 
     public float SEPARATE_DISTANCE;
     float SeparateDistSqr;
@@ -68,16 +53,107 @@ public class MovementManager : MonoBehaviour {
     public bool linearSeparationForce;
 
     public bool inverseSquareLaw;
+    public bool doCollisionAvoidance;
+    public bool useSeparation;
+    public float fallingDistance;
+    public float verticalOffset;
 
+    public float MAX_SEE_AHEAD;
+    public float MAX_AVOIDANCE_FORCE;
+    public float MAX_CLIFF_AVOIDANCE_FORCE;
+    public float NEIGHBOR_DISTANCE;
+    public float SEPARATION_WEIGHT;
+    public float ALIGN_WEIGHT;
+    public float COHERE_WEIGHT;
+    public float BREAK_SCALE_DOWN;
+    public float QUEUE_RADIUS;
+    public float COLLISION_AVOIDANCE_WEIGHT;
+    public float FACE_VELOCITY_THREASHOLD_MAGNITUDE;
+    public float FACE_VELOCITY_THREASHOLD_DELTA_ANGLE;
     
+
+
+    IBoid host;
+    Rigidbody rigidBody;
+    public Transform navPoint;
+    public Vector3 NavPoint
+    {
+        get
+        {
+            return navPoint.position;
+        }
+    }
+    public float maxSpeed;
+    public float maxForce;
+    public float slowingDistance;
+
+    public float moveAngleThreshold;
+    public float singleAxisTurnSpeed;
+
+    Vector3 groundNormal;
+    Vector3 prevVelocity;
+
+    public float pathRadius;
+    Path currentPath;
+    IEnumerator pathFollowRoutine;
+
+
+    public float W_FLOCK_ENROUTE;
+    public float W_FLOCK_IDLE;
+    [Header("Not for use in inspector")]
+    public float _flockWeight;
+
+
+    public Vector3 Velocity
+    {
+        get
+        {
+            if (rigidBody != null)
+            {
+                // We want to ignore velocity not along the ground plane. Specifically, we are negating
+                // the velocity component affected by gravity.
+                // Since we are resetting the transform position to the vertical offset each frame,
+                // the unit is effectively continuously falling, and this shows up in Velocity.
+                return Vector3.ProjectOnPlane(rigidBody.velocity, groundNormal);
+            }
+
+            return Vector3.zero;
+        }
+    }
+
+    bool isGrounded;
+    private bool IsGrounded
+    {
+        get
+        {
+            return isGrounded;
+        }
+
+        set
+        {
+            isGrounded = value;
+            rigidBody.useGravity = !value;
+            LockRotation(value);
+        }
+    }
 
     public void Invoke(IBoid _host)
     {
         host = _host;
+    }
+
+    void Awake()
+    {
+        rigidBody = GetComponent<Rigidbody>();
+    }
+
+    void Start()
+    {
         vSteer = Vector3.zero;
         vDesired = Vector3.zero;
         _vDesired = Vector3.zero;
         vBreak = Vector3.zero;
+        prevVelocity = Velocity;
 
         NeighborDistSqr = NEIGHBOR_DISTANCE * NEIGHBOR_DISTANCE;
         SeparateDistSqr = SEPARATE_DISTANCE * SEPARATE_DISTANCE;
@@ -121,8 +197,7 @@ public class MovementManager : MonoBehaviour {
     public void CollisionAvoidance()
     {
         //vSteer += DoCollisionAvoidance();
-        vDesired += DoCollisionAvoidance() * COLLISION_AVOIDANCE_WEIGHT;
-
+        vDesired += (DoCollisionAvoidance() + DoCliffAvoidance()) * COLLISION_AVOIDANCE_WEIGHT;
     }
 
     public void Separate()
@@ -132,19 +207,19 @@ public class MovementManager : MonoBehaviour {
 
     public void Flock()
     {
-        vDesired += DoFlock() * FLOCK_WEIGHT;
+        vDesired += DoFlock() * _flockWeight;
     }
 
     void UpdateManager()
     {
-        if (vDesired.sqrMagnitude > host.MaxSpeed * host.MaxSpeed)
+        if (vDesired.sqrMagnitude > maxSpeed * maxSpeed)
         {
-            vDesired = vDesired.normalized * host.MaxSpeed;
+            vDesired = vDesired.normalized * maxSpeed;
         }
-        vSteer = vDesired - host.Velocity;
-        if (vSteer.sqrMagnitude > host.MaxForce * host.MaxForce)
+        vSteer = vDesired - Velocity;
+        if (vSteer.sqrMagnitude > maxForce * maxForce)
         {
-            vSteer = vSteer.normalized * host.MaxForce;
+            vSteer = vSteer.normalized * maxForce;
         }
 
         vBreak += DoQueue();
@@ -160,7 +235,7 @@ public class MovementManager : MonoBehaviour {
 
     Vector3 DoMove()
     {
-        _vDesired = transform.forward * host.MaxSpeed;
+        _vDesired = transform.forward * maxSpeed;
         return _vDesired;
     }
 
@@ -169,19 +244,19 @@ public class MovementManager : MonoBehaviour {
         // For each steering force, we need to take the planar projection of the vector that points from
         // the unit to the target, onto the ground normal. This is necessary because the unit cannot
         // move except in directions along the ground. Else the unit would be applying an upward force to reach an elevated target... But our unit cannot fly.
-        Vector3 planarProj = Vector3.ProjectOnPlane((target - host.NavPoint.position), host.GroundNormal);
-        _vDesired = planarProj.normalized * host.MaxSpeed;
+        Vector3 planarProj = Vector3.ProjectOnPlane((target - NavPoint), groundNormal);
+        _vDesired = planarProj.normalized * maxSpeed;
 
         return _vDesired;
     }
 
     Vector3 DoSeekArrive(Vector3 target)
     {
-        Vector3 planarProj = Vector3.ProjectOnPlane((target - host.NavPoint.position), host.GroundNormal);
-        Vector3 vDesiredMax = planarProj.normalized * host.MaxSpeed;
-        if (planarProj.sqrMagnitude < host.SlowingDistance * host.SlowingDistance)
+        Vector3 planarProj = Vector3.ProjectOnPlane((target - NavPoint), groundNormal);
+        Vector3 vDesiredMax = planarProj.normalized * maxSpeed;
+        if (planarProj.sqrMagnitude < slowingDistance * slowingDistance)
         {
-            float interpolationVal = (planarProj.magnitude - host.StoppingDistance) / (host.SlowingDistance - host.StoppingDistance);
+            float interpolationVal = (planarProj.magnitude - pathRadius) / (slowingDistance - pathRadius);
             _vDesired = Vector3.Lerp(Vector3.zero, vDesiredMax, interpolationVal);
         }
         else
@@ -194,8 +269,8 @@ public class MovementManager : MonoBehaviour {
 
     Vector3 DoFlee(Vector3 target)
     {
-        Vector3 planarProj = Vector3.ProjectOnPlane((host.NavPoint.position - target), host.GroundNormal);
-        _vDesired = planarProj.normalized * host.MaxSpeed;
+        Vector3 planarProj = Vector3.ProjectOnPlane((NavPoint - target), groundNormal);
+        _vDesired = planarProj.normalized * maxSpeed;
         return _vDesired;
     }
 
@@ -206,20 +281,45 @@ public class MovementManager : MonoBehaviour {
 
     Vector3 DoEvade(IBoid target)
     {
-        float distanceToTarget = (host.NavPoint.position - target.NavPoint.position).magnitude;
-        int t = Mathf.RoundToInt(distanceToTarget / host.MaxSpeed);
-        Vector3 futurePosition = target.NavPoint.position + target.Velocity * t;
+        float distanceToTarget = (NavPoint - target.NavPoint).magnitude;
+        int t = Mathf.RoundToInt(distanceToTarget / maxSpeed);
+        Vector3 futurePosition = target.NavPoint + target.Velocity * t;
 
         return DoFlee(futurePosition);
     }
 
     Vector3 DoPursue(IBoid target)
     {
-        float distanceToTarget = (host.NavPoint.position - target.NavPoint.position).magnitude;
-        int t = Mathf.RoundToInt(distanceToTarget / host.MaxSpeed);
-        Vector3 futurePosition = target.NavPoint.position + target.Velocity * t;
+        float distanceToTarget = (NavPoint - target.NavPoint).magnitude;
+        int t = Mathf.RoundToInt(distanceToTarget / maxSpeed);
+        Vector3 futurePosition = target.NavPoint + target.Velocity * t;
 
         return DoSeek(futurePosition);
+    }
+
+    // -1 for left, 0 for center, 1 for right
+    int ToMyLeftOrRight(Vector3 point)
+    {
+        return AngleDir(transform.forward, point - transform.position, transform.up);
+    }
+
+    int AngleDir(Vector3 fwd, Vector3 targetDir, Vector3 up)
+    {
+        Vector3 perp = Vector3.Cross(fwd, targetDir);
+        float dir = Vector3.Dot(perp, up);
+
+        if (dir > 0)
+        {
+            return 1;
+        }
+        else if (dir < 0)
+        {
+            return -1;
+        }
+        else
+        {
+            return 0;
+        }
     }
 
     Vector3 DoCollisionAvoidance()
@@ -227,9 +327,50 @@ public class MovementManager : MonoBehaviour {
         RaycastHit hitData;
         if (GetClosestObsticle(out hitData))
         {
+            // Secondary Check: What type of edge did we detect?
+            int leftRight = ToMyLeftOrRight(hitData.point);
+            // left
+            if (leftRight == -1)
+            {
+                // straight wall -> turn away from the wall
+                if (Physics.Raycast(transform.position, -transform.right, 2.5f, groundLayer))
+                {
+                    collisionDetected = true;
+                    correctionPoint = hitData.point + hitData.normal * Velocity.magnitude;
+                    return hitData.distance > wallBuffer ? DoSeek(correctionPoint) : Vector3.ProjectOnPlane(hitData.normal, groundNormal).normalized * maxSpeed;
+                }
+                // corner -> turn away from corner
+                else
+                {
+                    Vector3 proj = centerProjectionPoint.position + transform.right * transform.localScale.x / 2f;
+                    Vector3 projDir = Quaternion.AngleAxis(collisionDetectionAngle, Vector3.up) * transform.forward;
+                    Vector3 target = proj + projDir * MAX_SEE_AHEAD;
+
+                    return DoSeek(target);
+                }
+            }
+            // right
+            else if (leftRight == 1)
+            {
+                if (Physics.Raycast(transform.position, transform.right, 2.5f, groundLayer))
+                {
+                    collisionDetected = true;
+                    correctionPoint = hitData.point + hitData.normal * Velocity.magnitude;
+                    return hitData.distance > wallBuffer ? DoSeek(correctionPoint) : Vector3.ProjectOnPlane(hitData.normal, groundNormal).normalized * maxSpeed;
+                }
+                else
+                {
+                    Vector3 proj = centerProjectionPoint.position - transform.right * transform.localScale.x / 2f;
+                    Vector3 projDir = Quaternion.AngleAxis(collisionDetectionAngle, Vector3.up) * transform.forward;
+                    Vector3 target = proj + projDir * MAX_SEE_AHEAD;
+
+                    return DoSeek(target);
+                }
+            }
+
             collisionDetected = true;
-            correctionPoint = hitData.point + hitData.normal * host.Velocity.magnitude;
-            return hitData.distance > wallBuffer ? DoSeek(correctionPoint) : Vector3.ProjectOnPlane(hitData.normal, host.GroundNormal).normalized * host.MaxSpeed;
+            correctionPoint = hitData.point + hitData.normal * Velocity.magnitude;
+            return hitData.distance > wallBuffer ? DoSeek(correctionPoint) : Vector3.ProjectOnPlane(hitData.normal, groundNormal).normalized * maxSpeed;
         }
 
         collisionDetected = false;
@@ -239,25 +380,18 @@ public class MovementManager : MonoBehaviour {
     // Not Currently Working
     Vector3 DoCliffAvoidance()
     {
-        Vector3 proj1 = centerProjectionPoint.position + transform.right * host.TransformPoint.localScale.x / 2f;
-        Vector3 proj2 = centerProjectionPoint.position - transform.right * host.TransformPoint.localScale.x / 2f;
-        Vector3 projDir1 = Quaternion.AngleAxis(collisionDetectionAngle, Vector3.up) * transform.forward;
-        Vector3 projDir2 = Quaternion.AngleAxis(-collisionDetectionAngle, Vector3.up) * transform.forward;
-        Vector3 checkCliffPoint1 = proj1 + projDir1 * MAX_SEE_AHEAD;
-        Vector3 checkCliffPoint2 = proj2 + projDir2 * MAX_SEE_AHEAD;
+        /*
+        Vector3 checkPoint = transform.position;
+        if (!Physics.Raycast(checkPoint, Vector3.down, fallingDistance, groundLayer))
+        {
+            collisionDetected = true;
 
-        if (!Physics.Raycast(checkCliffPoint1, Vector3.down, host.FallDistance, groundLayer))
-        {
-            collisionDetected = true;
-            return DoSeek(checkCliffPoint2);
-        }
-        if (!Physics.Raycast(checkCliffPoint2, Vector3.down, host.FallDistance, groundLayer))
-        {
-            collisionDetected = true;
-            return DoSeek(checkCliffPoint1);
+            vAvoid = Vector3.Lerp(Vector3.zero, -Velocity.normalized * MAX_CLIFF_AVOIDANCE_FORCE, Velocity.magnitude / maxSpeed);
+            return vAvoid;
         }
 
         collisionDetected = false;
+        */
         return Vector3.zero;
     }
 
@@ -274,7 +408,7 @@ public class MovementManager : MonoBehaviour {
             if (neighbor == host)
                 continue;
 
-            Vector3 neighborToHost = host.NavPoint.position - neighbor.NavPoint.position;
+            Vector3 neighborToHost = NavPoint - neighbor.NavPoint;
 
             if (neighborToHost.sqrMagnitude <= SeparateDistSqr)
             {
@@ -283,12 +417,12 @@ public class MovementManager : MonoBehaviour {
                 {
                     if (inverseSquareLaw)
                     {
-                        Vector3 vDesiredN = neighborToHost.normalized * host.MaxSpeed / neighborToHost.magnitude;
+                        Vector3 vDesiredN = neighborToHost.normalized * maxSpeed / neighborToHost.magnitude;
                         sumSeparationForce += vDesiredN;
                     }
                     else
                     {
-                        Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(host.MaxSpeed, 0, neighborToHost.magnitude / NEIGHBOR_DISTANCE);
+                        Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(maxSpeed, 0, neighborToHost.magnitude / NEIGHBOR_DISTANCE);
                         sumSeparationForce += vDesiredN;
                     }
                 }
@@ -296,12 +430,12 @@ public class MovementManager : MonoBehaviour {
                 {
                     if (inverseSquareLaw)
                     {
-                        Vector3 vDesiredN = neighborToHost.normalized * host.MaxSpeed / neighborToHost.sqrMagnitude;
+                        Vector3 vDesiredN = neighborToHost.normalized * maxSpeed / neighborToHost.sqrMagnitude;
                         sumSeparationForce += vDesiredN;
                     }
                     else
                     {
-                        Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(host.MaxSpeed, 0, neighborToHost.sqrMagnitude / NeighborDistSqr);
+                        Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(maxSpeed, 0, neighborToHost.sqrMagnitude / NeighborDistSqr);
                         sumSeparationForce += vDesiredN;
                     }
                 }
@@ -316,7 +450,7 @@ public class MovementManager : MonoBehaviour {
             if (neighborToHost.sqrMagnitude > SeparateDistSqr && neighborToHost.sqrMagnitude <= CohereDistSqr)
             {
                 neighborsCohereCount++;
-                sumNeighborPosition += neighbor.NavPoint.position;
+                sumNeighborPosition += neighbor.NavPoint;
             }
         }
 
@@ -327,17 +461,17 @@ public class MovementManager : MonoBehaviour {
         if (neighborsCohereCount > 0)
         {
             Vector3 avgNeighborPosition = sumNeighborPosition / neighborsCohereCount;
-            cohesionForce = (avgNeighborPosition - transform.position).normalized * host.MaxSpeed;
+            cohesionForce = (avgNeighborPosition - transform.position).normalized * maxSpeed;
         }
 
-        if (separationForce.sqrMagnitude > host.MaxSpeed * host.MaxSpeed)
-            separationForce = separationForce.normalized * host.MaxSpeed;
+        if (separationForce.sqrMagnitude > maxSpeed * maxSpeed)
+            separationForce = separationForce.normalized * maxSpeed;
 
-        if (alignmentForce.sqrMagnitude > host.MaxSpeed * host.MaxSpeed)
-            alignmentForce = alignmentForce.normalized * host.MaxSpeed;
+        if (alignmentForce.sqrMagnitude > maxSpeed * maxSpeed)
+            alignmentForce = alignmentForce.normalized * maxSpeed;
 
-        if (cohesionForce.sqrMagnitude > host.MaxSpeed * host.MaxSpeed)
-            cohesionForce = cohesionForce.normalized * host.MaxSpeed;
+        if (cohesionForce.sqrMagnitude > maxSpeed * maxSpeed)
+            cohesionForce = cohesionForce.normalized * maxSpeed;
 
         return separationForce * SEPARATION_WEIGHT + alignmentForce * ALIGN_WEIGHT + cohesionForce * COHERE_WEIGHT;
     }
@@ -348,12 +482,12 @@ public class MovementManager : MonoBehaviour {
         IBoid neighborAhead;
         if (GetNeighborAhead(out neighborAhead))
         {
-            Vector3 breakForce = -host.Velocity * BREAK_SCALE_DOWN;
+            Vector3 breakForce = -Velocity * BREAK_SCALE_DOWN;
             breakForce += -vSteer * BREAK_SCALE_DOWN;
 
-            if (Vector3.Distance(host.NavPoint.position, neighborAhead.NavPoint.position) < QUEUE_RADIUS)
+            if (Vector3.Distance(NavPoint, neighborAhead.NavPoint) < QUEUE_RADIUS)
             {
-                host.ScaleVelocity(0.3f);
+                rigidBody.velocity *= 0.3f;
             }
             return breakForce;
         }
@@ -364,11 +498,11 @@ public class MovementManager : MonoBehaviour {
     bool GetNeighborAhead(out IBoid neighbor)
     {
         neighbor = null;
-        Vector3 qAhead = host.Velocity.normalized * QUEUE_RADIUS;
+        Vector3 qAhead = Velocity.normalized * QUEUE_RADIUS;
         Vector3 checkPoint = centerProjectionPoint.position + qAhead;
         foreach (IBoid agent in GameCtrl.Instance.activeUnitsInGame)
         {
-            if (agent != host && Vector3.Distance(checkPoint, agent.TransformPoint.position) <= QUEUE_RADIUS)
+            if (agent != host && Vector3.Distance(checkPoint, agent.Position) <= QUEUE_RADIUS)
             {
                 neighbor = agent;
                 return true;
@@ -387,19 +521,19 @@ public class MovementManager : MonoBehaviour {
             if (neighbor == host)
                 continue;
 
-            Vector3 neighborToHost = host.NavPoint.position - neighbor.NavPoint.position;
+            Vector3 neighborToHost = NavPoint - neighbor.NavPoint;
             if (neighborToHost.sqrMagnitude <= NeighborDistSqr)
             {
 
                 neighborCount++;
                 if (linearSeparationForce)
                 {
-                    Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(host.MaxSpeed, 0, neighborToHost.magnitude / NEIGHBOR_DISTANCE);
+                    Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(maxSpeed, 0, neighborToHost.magnitude / NEIGHBOR_DISTANCE);
                     sumSeparationForce += vDesiredN;
                 }
                 else
                 {
-                    Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(host.MaxSpeed, 0, neighborToHost.sqrMagnitude / NeighborDistSqr);
+                    Vector3 vDesiredN = neighborToHost.normalized * Mathf.Lerp(maxSpeed, 0, neighborToHost.sqrMagnitude / NeighborDistSqr);
                     sumSeparationForce += vDesiredN;
                 }
             }
@@ -422,9 +556,12 @@ public class MovementManager : MonoBehaviour {
         hitData = default(RaycastHit);
         RaycastHit hit;
 
-        for (int i = 0; i < projectionPoints.Length; i++)
+        // will need to do this differently to accomodate projection numbers other than 2.
+        int numProjections = 2;
+        for (int i = 0; i < numProjections; i++)
         {
-            Vector3 projPoint = projectionPoints[i].position;
+            // Vector3 projPoint = projectionPoints[i].position;
+            Vector3 projPoint = transform.position;
             Vector3 projDir = i % 2 == 0 ? Quaternion.AngleAxis(collisionDetectionAngle, Vector3.up) * transform.forward : Quaternion.AngleAxis(-collisionDetectionAngle, Vector3.up) * transform.forward;
             if (Physics.Raycast(projPoint, projDir, out hit, MAX_SEE_AHEAD, collisionAvoidanceLayer))
             {
@@ -444,10 +581,11 @@ public class MovementManager : MonoBehaviour {
         return collisionFound;
     }
 
+    /*
     bool GetClosestObsticle_Old(out Vector3 collisionPointNormal)
     {
-        leftSide = transform.position + new Vector3(-transform.forward.z, transform.forward.y, transform.forward.x) * 0.5f;
-        rightSide = transform.position + new Vector3(transform.forward.z, transform.forward.y, -transform.forward.x) * 0.5f;
+        Vector3 leftSide = transform.position + new Vector3(-transform.forward.z, transform.forward.y, transform.forward.x) * 0.5f;
+        Vector3 rightSide = transform.position + new Vector3(transform.forward.z, transform.forward.y, -transform.forward.x) * 0.5f;
 
         RaycastHit lHit, rHit;
         float angleOfSlope;
@@ -513,112 +651,108 @@ public class MovementManager : MonoBehaviour {
         collisionPointNormal = Vector3.zero;
         return false;
     }
-
-    /*
-    // THIS DOESN'T WORK
-    Vector3 DoCollisionAvoidanceTuts()
-    {
-        RaycastHit hit;
-        if (Physics.Raycast(transform.position, transform.forward, out hit, MAX_SEE_AHEAD, collisionAvoidanceLayer))
-        {
-            IObsticle obsticle = hit.collider.GetComponent<IObsticle>();
-            float dynamicLength = host.Velocity.magnitude / host.MaxSpeed;
-            Vector3 ahead = transform.position + host.Velocity.normalized * dynamicLength * MAX_SEE_AHEAD;
-
-            Vector3 vAvoidance = (ahead - obsticle.Center).normalized * MAX_AVOIDANCE_FORCE;
-            return vAvoidance - host.Velocity;
-        }
-        return Vector3.zero;
-    }
-
-    // THIS DOESN'T WORK
-    Vector3 DoCollisionAvoidance()
-    {
-        IObsticle target;
-        Vector3 collisionPoint;
-        if (GetMostThreatening(out target, out collisionPoint))
-        {
-            Vector3 vAvoid = (collisionPoint - target.Center).normalized;
-            float avoidForce = Mathf.Lerp(MAX_AVOIDANCE_FORCE, 0, (target.Center - transform.position).magnitude / MAX_SEE_AHEAD);
-            return vAvoid * avoidForce - host.Velocity;
-        }
-        return Vector3.zero;
-    }
-
-    bool GetMostThreatening(out IObsticle target, out Vector3 collisionPoint)
-    {
-        target = default(IObsticle);
-        leftSide = transform.position + new Vector3(-transform.forward.z, transform.forward.y, transform.forward.x) * 0.5f;
-        rightSide = transform.position + new Vector3(transform.forward.z, transform.forward.y, -transform.forward.x) * 0.5f;
-
-        RaycastHit lHit, rHit;
-        if (Physics.Raycast(leftSide, transform.forward, out lHit, MAX_SEE_AHEAD, collisionAvoidanceLayer) && Physics.Raycast(rightSide, transform.forward, out rHit, MAX_SEE_AHEAD, collisionAvoidanceLayer))
-        {
-            if (lHit.distance <= rHit.distance)
-            {
-                target = lHit.collider.GetComponent<IObsticle>();
-                collisionPoint = lHit.point;
-            }
-            else
-            {
-                target = rHit.collider.GetComponent<IObsticle>();
-                collisionPoint = rHit.point;
-            }
-            return true;
-        }
-        else if (Physics.Raycast(leftSide, transform.forward, out lHit, MAX_SEE_AHEAD, collisionAvoidanceLayer))
-        {
-            target = lHit.collider.GetComponent<UnitCtrl>() as IObsticle;
-            collisionPoint = lHit.point;
-            return true;
-        }
-        else if (Physics.Raycast(rightSide, transform.forward, out rHit, MAX_SEE_AHEAD, collisionAvoidanceLayer))
-        {
-            target = rHit.collider.GetComponent<UnitCtrl>() as IObsticle;
-            collisionPoint = rHit.point;
-            return true;
-        }
-
-        collisionPoint = Vector3.zero;
-        return false;
-    }
     */
 
+    void FixedUpdate()
+    {
+        if (doCollisionAvoidance)
+        {
+            CollisionAvoidance();
+        }
+
+        Ray ray = new Ray(rigidBody.position, Vector3.down);
+        RaycastHit rHit;
+        if (Physics.Raycast(ray, out rHit, 100, groundLayer))
+        {
+            groundNormal = rHit.normal;
+
+            // Initiate Falling Condition
+            if (rHit.distance >= fallingDistance)
+            {
+                IsGrounded = false;
+            }
+
+            // Terminate Falling Condition
+            if (!IsGrounded && rHit.distance < fallingDistance)
+            {
+                IsGrounded = true;
+
+                // Must reset velocity vector otherwise it will continue to point downward from falling.
+                rigidBody.velocity = Vector3.zero;
+            }
+
+            // Only allow steering forces to be applied if Grounded.
+            // While Grounded, if the unit height deviates from the vertical offset, reset it.
+            if (IsGrounded)
+            {
+                if (rHit.distance != verticalOffset)
+                {
+                    rigidBody.MovePosition(new Vector3(rigidBody.position.x, rHit.point.y + verticalOffset, rigidBody.position.z));
+                    rigidBody.velocity = new Vector3(rigidBody.velocity.x, 0, rigidBody.velocity.z);
+                }
+
+                if (useSeparation)
+                    Separate();
+
+                Flock();
+
+                rigidBody.AddForce(Steering, ForceMode.VelocityChange);
+
+            }
+        }
+        else
+        {
+            UnityEngine.Debug.Log("ERR: Raycast did not intersect with Ground Layer");
+        }
+
+        // Face in the direction of movement. 
+        /*
+        if (rigidBody.velocity.sqrMagnitude > FACE_VELOCITY_THREASHOLD_MAGNITUDE * FACE_VELOCITY_THREASHOLD_MAGNITUDE && Vector3.Angle(rigidBody.velocity, prevVelocity) > FACE_VELOCITY_THREASHOLD_DELTA_ANGLE)
+        {
+            prevVelocity = Velocity;
+            Vector3 lookDirection = new Vector3(rigidBody.velocity.x, 0, rigidBody.velocity.z);
+            rigidBody.rotation = Quaternion.LookRotation(lookDirection);
+        }
+        */
+
+
+        Vector3 _dir = Velocity.normalized;
+        float _theta = Mathf.Atan2(_dir.x, _dir.z) * Mathf.Rad2Deg;
+
+        if (Mathf.Abs(Mathf.DeltaAngle(transform.eulerAngles.y, _theta)) > moveAngleThreshold)
+        {
+            float rotationStep = Mathf.MoveTowardsAngle(transform.eulerAngles.y, _theta, singleAxisTurnSpeed * Time.fixedDeltaTime);
+            rigidBody.MoveRotation(Quaternion.Euler(Vector3.up * rotationStep));
+        }
+
+    }
+
+    void LockRotation(bool val)
+    {
+        rigidBody.freezeRotation = val;
+    }
 
     void OnDrawGizmos()
     {
-        if (host == null)
-            return;
-        if (host.doCA)
+        if (doCollisionAvoidance)
         {
-            /*
-            Gizmos.color = collisionDetected ? Color.red : Color.green;
-            Gizmos.DrawLine(leftSide, leftSide + transform.forward * MAX_SEE_AHEAD);
-            Gizmos.DrawLine(rightSide, rightSide + transform.forward * MAX_SEE_AHEAD);
-            */
-
-            Gizmos.color = collisionDetected ? Color.red : Color.green;
-            for (int i = 0; i < projectionPoints.Length; i++)
+            Gizmos.color = Color.red;
+            if (collisionDetected)
             {
-                Gizmos.color = collisionDetected ? Color.red : Color.green;
-                Vector3 projPoint = projectionPoints[i].position;
-                Vector3 projDir = i % 2 == 0 ? Quaternion.AngleAxis(collisionDetectionAngle, Vector3.up) * transform.forward : Quaternion.AngleAxis(-collisionDetectionAngle, Vector3.up) * transform.forward;
-                Gizmos.DrawLine(projPoint, projPoint + projDir * MAX_SEE_AHEAD);
-                Gizmos.color = Color.blue;
-                Gizmos.DrawSphere(projPoint + projDir * MAX_SEE_AHEAD, .25f);
+                Gizmos.DrawLine(transform.position, transform.position + vAvoid);
             }
 
-            Gizmos.color = Color.blue;
-            Gizmos.DrawSphere(correctionPoint, 0.25f);
+            Gizmos.color = collisionDetected ? Color.red : Color.green;
 
-            Vector3 proj1 = centerProjectionPoint.position + transform.right * host.TransformPoint.localScale.x / 2f;
-            Vector3 proj2 = centerProjectionPoint.position - transform.right * host.TransformPoint.localScale.x / 2f;
-            Gizmos.color = Color.yellow;
-
-            Vector3 projDir1 = Quaternion.AngleAxis(collisionDetectionAngle, Vector3.up) * transform.forward;
-            Vector3 projDir2 = Quaternion.AngleAxis(-collisionDetectionAngle, Vector3.up) * transform.forward;
-            Gizmos.DrawCube(proj1 + projDir1 * MAX_SEE_AHEAD, Vector3.one / 4f);
-            Gizmos.DrawCube(proj2 + projDir2 * MAX_SEE_AHEAD, Vector3.one / 4f);
+            int numProjections = 2;
+            for (int i = 0; i < numProjections; i++)
+            {
+                Gizmos.color = collisionDetected ? Color.red : Color.green;
+                //Vector3 projPoint = projectionPoints[i].position;
+                Vector3 projPoint = transform.position;
+                Vector3 projDir = i % 2 == 0 ? Quaternion.AngleAxis(collisionDetectionAngle, Vector3.up) * transform.forward : Quaternion.AngleAxis(-collisionDetectionAngle, Vector3.up) * transform.forward;
+                Gizmos.DrawLine(projPoint, projPoint + projDir * MAX_SEE_AHEAD);
+            }
 
         }
     }
@@ -626,23 +760,7 @@ public class MovementManager : MonoBehaviour {
 
 public interface IBoid
 {
-    Vector3 Velocity { get; } // rb.velocity
-    float MaxSpeed { get; } // movementSpeed
-    float MaxForce { get; } // maxForce
-    float SlowingDistance { get; } // arrive radius
-    float StoppingDistance { get; } // closeEnough
-    Transform TransformPoint { get; } // transform
-    Transform NavPoint { get; } // navPoint
-    Vector3 GroundNormal { get; } // groundNormal
-
-    bool doCA { get; }
-    float FallDistance { get; }
-    void ScaleVelocity(float scalar);
-}
-
-public interface IObsticle
-{
-    Vector3 Center { get; }
-    float CollisionRadius { get; }
-    string Name { get; }
+    Vector3 NavPoint { get; }
+    Vector3 Velocity { get; }
+    Vector3 Position { get; }
 }
